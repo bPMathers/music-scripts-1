@@ -1,15 +1,17 @@
 {
-  "name": "js_midi_gen",
-  "version": "1.0.0",
-  "main": "script1.js",
-  "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1"
-  },
-  "keywords": [],
-  "author": "",
-  "license": "ISC",
-  "description": "",
-  "dependencies": {
-    "midi": "^2.0.0"
-  }
+    "type": "module",
+    "name": "js_midi_gen",
+    "version": "1.0.0",
+    "main": "script1.js",
+    "scripts": {
+        "test": "echo \"Error: no test specified\" && exit 1"
+    },
+    "keywords": [],
+    "author": "",
+    "license": "ISC",
+    "description": "",
+    "dependencies": {
+        "midi": "^2.0.0",
+        "nouislider": "^15.8.1"
+    }
 }

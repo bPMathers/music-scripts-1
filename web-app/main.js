@@ -124,7 +124,7 @@ function onMIDISuccess(midi) {
     midiAccess = midi;
 
     // Select the first available MIDI output
-    midiOutput = Array.from(midiAccess.outputs.values())[0];
+    midiOutput = Array.from(midiAccess.outputs.values())[4];
 
     if (midiOutput) {
         console.log('MIDI Output device found:', midiOutput.name);

@@ -57,7 +57,6 @@ export function stopNote(note, midiOutput, channel) {
 }
 
 export function parseMidiNotes(input) {
-    console.log('input --->', input);
     function getMidiNoteNumber(note) {
         const match = note.match(/^([A-Ga-g][#bB]?)(-?\d+)$/);
         if (!match) {
@@ -159,6 +158,21 @@ export const printInstructions = () => {
     console.log("To print instruction like this here, type 'h'");
     console.log("To toggle MIDI input debug, type 'di'");
     console.log("To toggle played pitches debug, type 'dp'");
+};
+
+export const gatherAndPrintMidiPorts = () => {
+    const numOutputs = midiOutput.getPortCount();
+
+    if (numOutputs === 0) {
+        console.error('No MIDI output ports available.');
+        process.exit(1);
+    }
+
+    // List all available MIDI output ports
+    console.log('Available MIDI Output Ports:');
+    for (let i = 0; i < numOutputs; i++) {
+        console.log(`Output ${i}: ${midiOutput.getPortName(i)}`);
+    }
 };
 
 export const gatherAndPrintInputs = (midiInput) => {

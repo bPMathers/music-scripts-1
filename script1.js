@@ -21,6 +21,8 @@ import {
     waitForInputSelection,
 } from './utils.js';
 
+import { playBirdFlockAscendingSequence } from './one-shots.js';
+
 // Variables
 const defaultPitches = [60, 62, 64, 67, 69];
 let midiInputChannel = 1;
@@ -49,6 +51,11 @@ const midiOutput = new midi.Output();
 // Set up MIDI input
 const midiInput = new midi.Input();
 // const numInputs = midiInput.getPortCount();
+
+// TODO: add possibility of multiple outputs
+const midiOutputs = [midiOutput];
+
+// TODO: add possibility of multiple allowedPitches arrays
 
 // Prompt user to select an output port
 const rl = readline.createInterface({
@@ -194,11 +201,13 @@ const generateNotes = async () => {
                             );
                         // midiOutput.sendMessage([0x90 + midiOutputChannel - 1, pitch, velocity]);
                         // TODO: Ask for which midi channel(s) we want to send to when starting process
-                        midiOutput.sendMessage([
-                            0x90 + midiOutputChannel - 1,
-                            pitch,
-                            velocity,
-                        ]);
+                        midiOutputs.forEach((output) =>
+                            output.sendMessage([
+                                0x90 + midiOutputChannel - 1,
+                                pitch,
+                                velocity,
+                            ])
+                        );
                     });
 
                     // Wait for the note duration
@@ -208,11 +217,13 @@ const generateNotes = async () => {
 
                     // Send Note Off messages
                     pitchesToPlay.forEach((pitch) =>
-                        midiOutput.sendMessage([
-                            0x80 + midiOutputChannel - 1,
-                            pitch,
-                            0,
-                        ])
+                        midiOutputs.forEach((output) =>
+                            output.sendMessage([
+                                0x80 + midiOutputChannel - 1,
+                                pitch,
+                                0,
+                            ])
+                        )
                     );
                 }
             } else {
@@ -223,6 +234,146 @@ const generateNotes = async () => {
             // Paused; wait briefly
             await new Promise((resolve) => setTimeout(resolve, 100));
         }
+    }
+};
+
+const handleCommandWithArgs = (input) => {
+    const cmd = input.slice(0, 2);
+    const arg = input.slice(2);
+
+    if (cmd === 'dl' || cmd === 'du') {
+        const value = parseInt(arg.trim(), 10);
+        if (!isNaN(value) && value > 0) {
+            if (cmd === 'dl') {
+                lowerDurationBound = value;
+
+                console.log(`Set lower duration bound to ${value} ms.`);
+            } else {
+                upperDurationBound = value;
+
+                console.log(`Set upper duration bound to ${value} ms.`);
+            }
+            if (lowerDurationBound > upperDurationBound) {
+                [lowerDurationBound, upperDurationBound] = [
+                    upperDurationBound,
+                    lowerDurationBound,
+                ];
+
+                console.log(
+                    'Swapped duration bounds to maintain lower <= upper.'
+                );
+            }
+        } else {
+            console.log('Invalid value for duration bound.');
+        }
+    } else if (cmd === 'ps') {
+        const value = parseInt(arg.trim(), 10);
+        if (!isNaN(value) && value >= 0 && value <= 100) {
+            silenceProbability = value;
+
+            console.log(`Set silence probability to ${value}%.`);
+        } else {
+            console.log('Invalid value for silence probability.');
+        }
+    } else if (cmd === 'cp') {
+        allowedPitches = parseMidiNotes(arg);
+
+        console.log('Set pitches to:');
+        printAllowedPitches(allowedPitches);
+    } else if (cmd === 'hd') {
+        const value = parseInt(arg.trim(), 10);
+
+        if (!isNaN(value) && value >= 1 && value <= 8) {
+            harmonyDepth = value;
+            console.log(`Harmony depth set to ${value}.`);
+        } else {
+            console.log('Invalid value for harmony depth.');
+        }
+    } else if (cmd === 'sl' || cmd === 'su') {
+        const value = parseInt(arg.trim(), 10);
+        if (!isNaN(value) && value > 0) {
+            if (cmd === 'sl') {
+                lowerSilenceBound = value;
+
+                console.log(`Set lower silence duration bound to ${value} ms.`);
+            } else {
+                upperSilenceBound = value;
+
+                console.log(`Set upper silence duration bound to ${value} ms.`);
+            }
+            if (lowerSilenceBound > upperSilenceBound) {
+                [lowerSilenceBound, upperSilenceBound] = [
+                    upperSilenceBound,
+                    lowerSilenceBound,
+                ];
+
+                console.log(
+                    'Swapped silence bounds to maintain lower <= upper.'
+                );
+            }
+        } else {
+            console.log('Invalid value for silence duration bound.');
+        }
+    } else if (cmd === 'vl' || cmd === 'vu') {
+        const value = parseInt(arg.trim(), 10);
+        if (!isNaN(value) && value >= 0 && value <= 127) {
+            if (cmd === 'vl') {
+                lowerVelocityBound = value;
+
+                console.log(`Set lower velocity bound to ${value}.`);
+            } else {
+                upperVelocityBound = value;
+
+                console.log(`Set upper velocity bound to ${value}.`);
+            }
+            if (lowerVelocityBound > upperVelocityBound) {
+                [lowerVelocityBound, upperVelocityBound] = [
+                    upperVelocityBound,
+                    lowerVelocityBound,
+                ];
+
+                console.log(
+                    'Swapped velocity bounds to maintain lower <= upper.'
+                );
+            }
+        } else {
+            console.log('Invalid value for velocity bound.');
+        }
+    } else {
+        // Assume it's a note addition or removal
+        const lastChar = input.slice(-1);
+        const notes = parseMidiNotes(input.slice(0, -1));
+
+        notes.forEach((note) => {
+            console.log('note', note);
+            const noteNumber = parseInt(note, 10);
+            if (!isNaN(noteNumber) && noteNumber >= 0 && noteNumber <= 127) {
+                if (lastChar === '+') {
+                    if (!allowedPitches.includes(noteNumber)) {
+                        allowedPitches.push(noteNumber);
+
+                        console.log(`Added note ${noteNumber} to pitches.`);
+                    } else {
+                        console.log(
+                            `Note ${noteNumber} is already in pitches.`
+                        );
+                    }
+                } else if (lastChar === '-') {
+                    const index = allowedPitches.indexOf(noteNumber);
+                    if (index !== -1) {
+                        allowedPitches.splice(index, 1);
+
+                        console.log(`Removed note ${noteNumber} from pitches.`);
+                    } else {
+                        console.log(`Note ${noteNumber} is not in pitches.`);
+                    }
+                } else {
+                    console.log('Invalid command.');
+                }
+            } else {
+                console.log('Invalid MIDI note number.');
+            }
+        });
     }
 };
 
@@ -238,199 +389,94 @@ const generateNotes = async () => {
     allowedPitches = await waitForStartingPitches(rl, defaultPitches);
     printInstructions();
 
-    // Set up user input handling
     rl.on('line', (inputLine) => {
         const input = inputLine.trim();
         if (input === '') return;
 
-        if (input === 's') {
-            if (!playing) {
-                console.log('Starting note generation...');
-                playing = true;
-            }
-        } else if (input === 'x') {
-            if (playing) {
-                console.log('Pausing note generation...');
-                playing = false;
-            }
-        } else if (input === 'h') {
-            printInstructions();
-        } else if (input === 'di') {
-            debugInput = !debugInput;
-            console.log(`setting debugInput to ${debugInput}`);
-        } else if (input === 'dp') {
-            debugPitches = !debugPitches;
-            console.log(`setting debugPitches to ${debugPitches}`);
-        } else if (input === 'l') {
-            printAllowedPitches(allowedPitches);
-        } else if (input === 'h') {
-            printInstructions();
-        } else if (input === 'q') {
-            console.log('Quitting program...');
-            running = false;
-            playing = false;
-            rl.close();
-            // call stop note with all integers from 0 to 127
-            for (let index = 0; index < 128; index++) {
-                stopNote(index, midiOutput, midiOutputChannel);
-            }
-            midiInput.closePort();
-            midiOutput.closePort();
-            process.exit(0);
-        } else {
-            // Handle other commands. The should all have 2 chars before the args
-            const cmd = input.slice(0, 2);
-            const arg = input.slice(2);
-
-            if (cmd === 'dl' || cmd === 'du') {
-                const value = parseInt(arg.trim(), 10);
-                if (!isNaN(value) && value > 0) {
-                    if (cmd === 'dl') {
-                        lowerDurationBound = value;
-
-                        console.log(`Set lower duration bound to ${value} ms.`);
-                    } else {
-                        upperDurationBound = value;
-
-                        console.log(`Set upper duration bound to ${value} ms.`);
-                    }
-                    if (lowerDurationBound > upperDurationBound) {
-                        [lowerDurationBound, upperDurationBound] = [
-                            upperDurationBound,
-                            lowerDurationBound,
-                        ];
-
-                        console.log(
-                            'Swapped duration bounds to maintain lower <= upper.'
-                        );
-                    }
-                } else {
-                    console.log('Invalid value for duration bound.');
-                }
-            } else if (cmd === 'ps') {
-                const value = parseInt(arg.trim(), 10);
-                if (!isNaN(value) && value >= 0 && value <= 100) {
-                    silenceProbability = value;
-
-                    console.log(`Set silence probability to ${value}%.`);
-                } else {
-                    console.log('Invalid value for silence probability.');
-                }
-            } else if (cmd === 'hd') {
-                const value = parseInt(arg.trim(), 10);
-
-                if (!isNaN(value) && value >= 1 && value <= 8) {
-                    harmonyDepth = value;
-                    console.log(`Harmony depth set to ${value}.`);
-                } else {
-                    console.log('Invalid value for silence probability.');
-                }
-            } else if (cmd === 'hf') {
-                harmonyMustBeFull = !harmonyMustBeFull;
-
-                console.log(
-                    `toggling harmonyMustBeFull to ${harmonyMustBeFull}`
+        switch (input) {
+            case 'z':
+                playBirdFlockAscendingSequence(
+                    undefined,
+                    midiOutput,
+                    midiOutputChannel
                 );
-            } else if (cmd === 'sl' || cmd === 'su') {
-                const value = parseInt(arg.trim(), 10);
-                if (!isNaN(value) && value > 0) {
-                    if (cmd === 'sl') {
-                        lowerSilenceBound = value;
-
-                        console.log(
-                            `Set lower silence duration bound to ${value} ms.`
-                        );
-                    } else {
-                        upperSilenceBound = value;
-
-                        console.log(
-                            `Set upper silence duration bound to ${value} ms.`
-                        );
-                    }
-                    if (lowerSilenceBound > upperSilenceBound) {
-                        [lowerSilenceBound, upperSilenceBound] = [
-                            upperSilenceBound,
-                            lowerSilenceBound,
-                        ];
-
-                        console.log(
-                            'Swapped silence bounds to maintain lower <= upper.'
-                        );
-                    }
-                } else {
-                    console.log('Invalid value for silence duration bound.');
+                break;
+            case 's':
+                if (!playing) {
+                    console.log('Starting note generation...');
+                    playing = true;
                 }
-            } else if (cmd === 'vl' || cmd === 'vu') {
-                const value = parseInt(arg.trim(), 10);
-                if (!isNaN(value) && value >= 0 && value <= 127) {
-                    if (cmd === 'vl') {
-                        lowerVelocityBound = value;
-
-                        console.log(`Set lower velocity bound to ${value}.`);
-                    } else {
-                        upperVelocityBound = value;
-
-                        console.log(`Set upper velocity bound to ${value}.`);
-                    }
-                    if (lowerVelocityBound > upperVelocityBound) {
-                        [lowerVelocityBound, upperVelocityBound] = [
-                            upperVelocityBound,
-                            lowerVelocityBound,
-                        ];
-
-                        console.log(
-                            'Swapped velocity bounds to maintain lower <= upper.'
-                        );
-                    }
-                } else {
-                    console.log('Invalid value for velocity bound.');
+                break;
+            case 'x':
+                if (playing) {
+                    console.log('Pausing note generation...');
+                    playing = false;
                 }
-            } else {
-                // Assume it's a note addition or removal
-                const lastChar = input.slice(-1);
-                const notes = parseMidiNotes(input.slice(0, -1));
+                break;
+            case 'h':
+                printInstructions();
+                break;
+            case 'q':
+                console.log('Quitting program...');
+                running = false;
+                playing = false;
+                rl.close();
+                // call stop note with all integers from 0 to 127
+                for (let index = 0; index < 128; index++) {
+                    midiOutputs.forEach((output) =>
+                        stopNote(index, output, midiOutputChannel)
+                    );
+                }
+                midiInput.closePort();
+                midiOutput.closePort();
+                process.exit(0);
 
-                notes.forEach((note) => {
-                    console.log('note', note);
-                    const noteNumber = parseInt(note, 10);
-                    if (
-                        !isNaN(noteNumber) &&
-                        noteNumber >= 0 &&
-                        noteNumber <= 127
-                    ) {
-                        if (lastChar === '+') {
-                            if (!allowedPitches.includes(noteNumber)) {
-                                allowedPitches.push(noteNumber);
+            case 'l':
+                printAllowedPitches(allowedPitches);
+                break;
 
-                                console.log(
-                                    `Added note ${noteNumber} to pitches.`
-                                );
-                            } else {
-                                console.log(
-                                    `Note ${noteNumber} is already in pitches.`
-                                );
-                            }
-                        } else if (lastChar === '-') {
-                            const index = allowedPitches.indexOf(noteNumber);
-                            if (index !== -1) {
-                                allowedPitches.splice(index, 1);
+            case 'di':
+                debugInput = !debugInput;
+                console.log(`setting debugInput to ${debugInput}`);
+                break;
 
-                                console.log(
-                                    `Removed note ${noteNumber} from pitches.`
-                                );
-                            } else {
-                                console.log(
-                                    `Note ${noteNumber} is not in pitches.`
-                                );
-                            }
-                        } else {
-                            console.log('Invalid command.');
-                        }
-                    } else {
-                        console.log('Invalid MIDI note number.');
-                    }
-                });
-            }
+            case 'dp':
+                debugPitches = !debugPitches;
+                console.log(`setting debugPitches to ${debugPitches}`);
+                break;
+
+            case 'hf':
+                harmonyMustBeFull = !harmonyMustBeFull;
+                console.log(
+                    `setting harmonyMustBeFull to ${harmonyMustBeFull}`
+                );
+                break;
+
+            case 'lp':
+                const numOutputs = midiOutput.getPortCount();
+
+                if (numOutputs === 0) {
+                    console.error('No MIDI output ports available.');
+                    process.exit(1);
+                }
+
+                // List all available MIDI output ports
+                console.log('Available MIDI Output Ports:');
+                for (let i = 0; i < numOutputs; i++) {
+                    console.log(`Output ${i}: ${midiOutput.getPortName(i)}`);
+                }
+
+                break;
+
+            default:
+                // any other case, it must be a 2 char command with args
+                if (input.length < 2) {
+                    console.log('Invalid command.');
+                    break;
+                }
+                handleCommandWithArgs(input);
+
+                break;
         }
     });
 

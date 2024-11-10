@@ -52,10 +52,6 @@ export const humanNoteToMidiNote = {
     B: 11,
 };
 
-export function stopNote(note, midiOutput, channel) {
-    midiOutput.send([0x80 + channel - 1, note, 0]); // Send "note off" message with velocity 0
-}
-
 export function parseMidiNotes(input) {
     function getMidiNoteNumber(note) {
         const match = note.match(/^([A-Ga-g][#bB]?)(-?\d+)$/);
@@ -84,49 +80,15 @@ export function parseMidiNotes(input) {
     });
 }
 
-export const waitForOutputPortSelection = (rl, midiOutput) => {
-    // Get the number of available MIDI output ports
-    const numOutputs = midiOutput.getPortCount();
-
-    if (numOutputs === 0) {
-        console.error('No MIDI output ports available.');
-        process.exit(1);
-    }
-
-    // List all available MIDI output ports
-    console.log('Available MIDI Output Ports:');
-    for (let i = 0; i < numOutputs; i++) {
-        console.log(`Output ${i}: ${midiOutput.getPortName(i)}`);
-    }
-
-    return new Promise((resolve) => {
-        rl.question(
-            'Enter the index of the MIDI output port you want to use: ',
-            (index) => {
-                const portIndex = parseInt(index, 10);
-                if (
-                    isNaN(portIndex) ||
-                    portIndex < 0 ||
-                    portIndex >= numOutputs
-                ) {
-                    console.error('Invalid output port index.');
-                    process.exit(1);
-                }
-                midiOutput.openPort(portIndex);
-                console.log(
-                    `Opened MIDI output port: ${midiOutput.getPortName(
-                        portIndex
-                    )}`
-                );
-                resolve();
-            }
-        );
-    });
-};
-
 export const printInstructions = () => {
     console.log('\nInstructions:');
     console.log("Press 's' to start, 'x' to pause, 'q' to quit.");
+    console.log(
+        "To activate a channel on a given port, type 'ac' followed by the port number and then comma and then the channel number, e.g., 'ac0,1'."
+    );
+    console.log(
+        "To de-activate a channel on a given port, type 'rc' followed by the port number and then comma and then the channel number, e.g., 'rc0,1'."
+    );
     console.log(
         "To add a pitch: type the comma-separated MIDI note number(s) followed by '+', e.g., '60+' or '69,71+'."
     );
@@ -154,6 +116,8 @@ export const printInstructions = () => {
     console.log(
         "To change upper velocity bound: type 'vu' followed by the value, e.g., 'vu120'."
     );
+    console.log("To print active ports and channels, type 'pc'");
+    console.log("To print available ports, type 'pp'");
     console.log("To toggle harmonyMustBeFull, type 'hf'");
     console.log("To print instruction like this here, type 'h'");
     console.log("To toggle MIDI input debug, type 'di'");
@@ -212,24 +176,6 @@ export const waitForInputSelection = (rl, midiInput) => {
                     )}`
                 );
                 resolve();
-            }
-        );
-    });
-};
-
-export const waitForOutputChannelSelection = (rl) => {
-    return new Promise((resolve) => {
-        rl.question(
-            'Enter the MIDI channel you want to output to: ',
-            (index) => {
-                const channel = parseInt(index, 10);
-                if (isNaN(channel) || channel < 0 || channel > 16) {
-                    console.error('Invalid output port index.');
-                    process.exit(1);
-                }
-
-                console.log(`MIDI output channel set to: ${channel}`);
-                resolve(channel);
             }
         );
     });

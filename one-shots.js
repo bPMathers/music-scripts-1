@@ -9,6 +9,7 @@ function generateNotesForOctaves(_notes = [0, 2, 4, 7, 9]) {
     return notes;
 }
 
+// TODO: make this one more customizable when triggered from the command line
 export function playBirdFlockAscendingSequence(
     baseNotes,
     midiOutput,

@@ -11,12 +11,9 @@ import readline from 'readline';
 import {
     printAllowedPitches,
     parseMidiNotes,
-    waitForOutputPortSelection,
-    stopNote,
     printInstructions,
-    waitForInputDesired,
-    waitForOutputChannelSelection,
     waitForStartingPitches,
+    waitForInputDesired,
     gatherAndPrintInputs,
     waitForInputSelection,
 } from './utils.js';
@@ -25,8 +22,6 @@ import { playBirdFlockAscendingSequence } from './one-shots.js';
 
 // Variables
 const defaultPitches = [60, 62, 64, 67, 69];
-let midiInputChannel = 1;
-let midiOutputChannel = 1;
 let debugInput = false;
 let debugPitches = false;
 let inputDesired = false;
@@ -42,20 +37,124 @@ let lowerVelocityBound = 50;
 let upperVelocityBound = 100;
 let playing = false;
 let running = true;
-let inputBuffer = '';
 const noteOnTimes = {}; // For tracking note durations from MIDI input
 
-// Set up MIDI output
-const midiOutput = new midi.Output();
+// List all available output ports
+const outputCount = new midi.Output().getPortCount();
+const printAvailableOutputPorts = () => {
+    console.log('Available MIDI output ports:');
+    for (let i = 0; i < outputCount; i++) {
+        console.log(`${i}: ${new midi.Output().getPortName(i)}`);
+    }
+};
+printAvailableOutputPorts();
+
+// Create separate output instances for each port
+const outputs = [];
+const isPortOpen = Array(outputCount).fill(false); // Track if each port is open
+
+for (let i = 0; i < outputCount; i++) {
+    const output = new midi.Output();
+    outputs.push(output);
+}
+
+// State object to track channels assigned to each port
+const portChannelMap = {};
+
+// Function to assign a channel to a specific port and open the port if needed
+function assignChannelToPort(portIndex, channel) {
+    const _channel = parseInt(channel, 10) - 1; // Convert to zero-based index
+    if (portIndex < outputCount && _channel >= 0 && _channel <= 15) {
+        if (!portChannelMap[portIndex]) {
+            portChannelMap[portIndex] = new Set();
+        }
+        portChannelMap[portIndex].add(_channel);
+        console.log(`Assigned channel ${channel} to port ${portIndex}`);
+
+        // Open the port if it's not already open
+        if (!isPortOpen[portIndex]) {
+            outputs[portIndex].openPort(portIndex);
+            isPortOpen[portIndex] = true;
+            console.log(`Opened port ${portIndex}`);
+        }
+    } else {
+        console.log('Invalid port index or channel number.');
+    }
+}
+
+// Function to remove a channel from a specific port
+function removeChannelFromPort(portIndex, channel) {
+    const _channel = parseInt(channel, 10) - 1; // Convert to zero-based index
+    if (portChannelMap[portIndex] && portChannelMap[portIndex].has(_channel)) {
+        // send note off for all notes
+        for (let note = 0; note < 128; note++) {
+            sendMidiNoteOffMessage(portIndex, note, _channel);
+        }
+
+        portChannelMap[portIndex].delete(_channel);
+        console.log(`Removed channel ${channel} from port ${portIndex}`);
+
+        // Close the port if no channels are assigned to it
+        if (portChannelMap[portIndex].size === 0) {
+            outputs[portIndex].closePort();
+            isPortOpen[portIndex] = false;
+            console.log(`Closed port ${portIndex} as no channels are assigned`);
+        }
+    } else {
+        console.log(`Channel ${_channel} is not assigned to port ${portIndex}`);
+    }
+}
+
+// Function to get the channels assigned to a port
+function getChannelsForPort(portIndex) {
+    return portChannelMap[portIndex] ?? new Set(); // Return an empty Set if no channels are assigned
+}
+
+function printActiveChannels() {
+    if (Object.keys(portChannelMap).length === 0) {
+        console.log('No active channels.');
+        return;
+    }
+
+    console.log('*** Active channels ***');
+    for (let portIndex = 0; portIndex < outputCount; portIndex++) {
+        const channels = getChannelsForPort(portIndex);
+        const oneBasedChannels = Array.from(channels).map(
+            (channel) => channel + 1
+        );
+        if (channels.size > 0) {
+            console.log(
+                `Port: ${portIndex}, channels (1-based): [${Array.from(
+                    oneBasedChannels
+                ).join(', ')}]`
+            );
+        }
+    }
+}
+
+// Function to send a MIDI message to multiple channels on a port
+function sendMidiNoteOnMessage(portIndex, note, velocity) {
+    if (isPortOpen[portIndex]) {
+        const channels = getChannelsForPort(portIndex);
+        channels.forEach((channel) => {
+            const statusByte = 144 + channel; // 144 is the status byte for note-on messages
+            outputs[portIndex].sendMessage([statusByte, note, velocity]);
+        });
+    }
+}
+
+function sendMidiNoteOffMessage(portIndex, note, channel) {
+    if (isPortOpen[portIndex]) {
+        const channels = channel ? [channel] : getChannelsForPort(portIndex);
+        channels.forEach((channel) => {
+            const statusByte = 128 + channel; // 128 is the status byte for note-off messages
+            outputs[portIndex].sendMessage([statusByte, note, 0]);
+        });
+    }
+}
 
 // Set up MIDI input
-const midiInput = new midi.Input();
-// const numInputs = midiInput.getPortCount();
-
-// TODO: add possibility of multiple outputs
-const midiOutputs = [midiOutput];
-
-// TODO: add possibility of multiple allowedPitches arrays
+// const midiInput = new midi.Input();
 
 // Prompt user to select an output port
 const rl = readline.createInterface({
@@ -63,48 +162,48 @@ const rl = readline.createInterface({
     output: process.stdout,
 });
 
-// Handle MIDI input messages
-midiInput.on('message', (deltaTime, message) => {
-    if (debugInput) console.log('input msg: ', message);
-    const [status, note, velocity] = message;
-    const messageType = status & 0xf0;
-    const channel = status & 0x0f;
+// TODO: Handle MIDI input messages
+// midiInput.on('message', (deltaTime, message) => {
+//     if (debugInput) console.log('input msg: ', message);
+//     const [status, note, velocity] = message;
+//     const messageType = status & 0xf0;
+//     const channel = status & 0x0f;
 
-    if (messageType === 0x90 && velocity !== 0) {
-        // Note On
-        noteOnTimes[note] = Date.now();
-    } else if (
-        messageType === 0x80 ||
-        (messageType === 0x90 && velocity === 0)
-    ) {
-        // Note Off
-        const noteOnTime = noteOnTimes[note];
-        if (noteOnTime) {
-            const duration = Date.now() - noteOnTime;
-            delete noteOnTimes[note];
-            if (duration < 1000) {
-                // Add note
-                if (!allowedPitches.includes(note)) {
-                    allowedPitches.push(note);
+//     if (messageType === 0x90 && velocity !== 0) {
+//         // Note On
+//         noteOnTimes[note] = Date.now();
+//     } else if (
+//         messageType === 0x80 ||
+//         (messageType === 0x90 && velocity === 0)
+//     ) {
+//         // Note Off
+//         const noteOnTime = noteOnTimes[note];
+//         if (noteOnTime) {
+//             const duration = Date.now() - noteOnTime;
+//             delete noteOnTimes[note];
+//             if (duration < 1000) {
+//                 // Add note
+//                 if (!allowedPitches.includes(note)) {
+//                     allowedPitches.push(note);
 
-                    console.log(
-                        `Added note ${note} to pitches (held for ${duration} ms).`
-                    );
-                }
-            } else {
-                // Remove note
-                const index = allowedPitches.indexOf(note);
-                if (index !== -1) {
-                    allowedPitches.splice(index, 1);
+//                     console.log(
+//                         `Added note ${note} to pitches (held for ${duration} ms).`
+//                     );
+//                 }
+//             } else {
+//                 // Remove note
+//                 const index = allowedPitches.indexOf(note);
+//                 if (index !== -1) {
+//                     allowedPitches.splice(index, 1);
 
-                    console.log(
-                        `Removed note ${note} from pitches (held for ${duration} ms).`
-                    );
-                }
-            }
-        }
-    }
-});
+//                     console.log(
+//                         `Removed note ${note} from pitches (held for ${duration} ms).`
+//                     );
+//                 }
+//             }
+//         }
+//     }
+// });
 
 const generateNotes = async () => {
     while (running) {
@@ -199,15 +298,10 @@ const generateNotes = async () => {
                                         lowerVelocityBound +
                                         1)
                             );
-                        // midiOutput.sendMessage([0x90 + midiOutputChannel - 1, pitch, velocity]);
-                        // TODO: Ask for which midi channel(s) we want to send to when starting process
-                        midiOutputs.forEach((output) =>
-                            output.sendMessage([
-                                0x90 + midiOutputChannel - 1,
-                                pitch,
-                                velocity,
-                            ])
-                        );
+
+                        for (let index = 0; index < outputs.length; index++) {
+                            sendMidiNoteOnMessage(index, pitch, velocity);
+                        }
                     });
 
                     // Wait for the note duration
@@ -216,15 +310,11 @@ const generateNotes = async () => {
                     );
 
                     // Send Note Off messages
-                    pitchesToPlay.forEach((pitch) =>
-                        midiOutputs.forEach((output) =>
-                            output.sendMessage([
-                                0x80 + midiOutputChannel - 1,
-                                pitch,
-                                0,
-                            ])
-                        )
-                    );
+                    pitchesToPlay.forEach((pitch) => {
+                        for (let index = 0; index < outputs.length; index++) {
+                            sendMidiNoteOffMessage(index, pitch);
+                        }
+                    });
                 }
             } else {
                 // No pitches to play; wait briefly
@@ -265,6 +355,36 @@ const handleCommandWithArgs = (input) => {
             }
         } else {
             console.log('Invalid value for duration bound.');
+        }
+    } else if (cmd === 'bf') {
+        const [portIndex, channel] = arg
+            .split(',')
+            .map((str) => parseInt(str.trim(), 10));
+
+        console.log(
+            `Playing bird flock ascending sequence on port ${portIndex}, channel ${channel}`
+        );
+
+        playBirdFlockAscendingSequence(undefined, outputs[portIndex], channel);
+    } else if (cmd === 'ac') {
+        const [portIndex, channel] = arg
+            .split(',')
+            .map((str) => parseInt(str.trim(), 10));
+
+        if (!isNaN(portIndex) && !isNaN(channel)) {
+            assignChannelToPort(portIndex, channel);
+        } else {
+            console.log('Invalid port index or channel number.');
+        }
+    } else if (cmd === 'rc') {
+        const [portIndex, channel] = arg
+            .split(',')
+            .map((str) => parseInt(str.trim(), 10));
+
+        if (!isNaN(portIndex) && !isNaN(channel)) {
+            removeChannelFromPort(portIndex, channel);
+        } else {
+            console.log('Invalid port index or channel number.');
         }
     } else if (cmd === 'ps') {
         const value = parseInt(arg.trim(), 10);
@@ -377,15 +497,24 @@ const handleCommandWithArgs = (input) => {
     }
 };
 
+// Clean up when done (important to prevent port issues)
+// TODO: investigate this
+process.on('exit', () => {
+    outputs.forEach((output, portIndex) => {
+        if (isPortOpen[portIndex]) {
+            output.closePort();
+            console.log(`Closed port ${portIndex}`);
+        }
+    });
+});
+
 // Start the main program
 (async () => {
-    await waitForOutputPortSelection(rl, midiOutput);
-    midiOutputChannel = await waitForOutputChannelSelection(rl);
-    inputDesired = await waitForInputDesired(rl);
-    if (inputDesired) {
-        gatherAndPrintInputs(midiInput);
-        await waitForInputSelection(rl, midiInput);
-    }
+    // inputDesired = await waitForInputDesired(rl);
+    // if (inputDesired) {
+    //     gatherAndPrintInputs(midiInput);
+    //     await waitForInputSelection(rl, midiInput);
+    // }
     allowedPitches = await waitForStartingPitches(rl, defaultPitches);
     printInstructions();
 
@@ -394,13 +523,6 @@ const handleCommandWithArgs = (input) => {
         if (input === '') return;
 
         switch (input) {
-            case 'z':
-                playBirdFlockAscendingSequence(
-                    undefined,
-                    midiOutput,
-                    midiOutputChannel
-                );
-                break;
             case 's':
                 if (!playing) {
                     console.log('Starting note generation...');
@@ -421,18 +543,25 @@ const handleCommandWithArgs = (input) => {
                 running = false;
                 playing = false;
                 rl.close();
-                // call stop note with all integers from 0 to 127
                 for (let index = 0; index < 128; index++) {
-                    midiOutputs.forEach((output) =>
-                        stopNote(index, output, midiOutputChannel)
-                    );
+                    for (let i = 0; i < outputs.length; i++) {
+                        sendMidiNoteOffMessage(i, index);
+                    }
                 }
-                midiInput.closePort();
-                midiOutput.closePort();
+                // midiInput.closePort();
+                outputs.forEach((output) => output.closePort());
                 process.exit(0);
 
             case 'l':
                 printAllowedPitches(allowedPitches);
+                break;
+
+            case 'pa':
+                printActiveChannels();
+                break;
+
+            case 'pp':
+                printAvailableOutputPorts();
                 break;
 
             case 'di':
@@ -453,7 +582,7 @@ const handleCommandWithArgs = (input) => {
                 break;
 
             case 'lp':
-                const numOutputs = midiOutput.getPortCount();
+                const numOutputs = outputs[0].getPortCount();
 
                 if (numOutputs === 0) {
                     console.error('No MIDI output ports available.');
@@ -463,7 +592,7 @@ const handleCommandWithArgs = (input) => {
                 // List all available MIDI output ports
                 console.log('Available MIDI Output Ports:');
                 for (let i = 0; i < numOutputs; i++) {
-                    console.log(`Output ${i}: ${midiOutput.getPortName(i)}`);
+                    console.log(`Output ${i}: ${outputs[0].getPortName(i)}`);
                 }
 
                 break;
@@ -481,6 +610,5 @@ const handleCommandWithArgs = (input) => {
     });
 
     // Main loop for note generation
-
     generateNotes();
 })();

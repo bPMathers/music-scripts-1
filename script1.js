@@ -28,6 +28,10 @@ let inputDesired = false;
 let harmonyDepth = 1;
 let harmonyMustBeFull = false;
 let allowedPitches = []; // Starting pitches
+let heldNotes = [];
+let pressedKeys = {};
+let sustainPressed = false;
+let noteHoldMode = false;
 let lowerDurationBound = 100; // ms
 let upperDurationBound = 500; // ms
 let silenceProbability = 20; // %
@@ -37,6 +41,7 @@ let lowerVelocityBound = 50;
 let upperVelocityBound = 100;
 let playing = false;
 let running = true;
+let waitingForNewInputPitches = false;
 const noteOnTimes = {}; // For tracking note durations from MIDI input
 
 // List all available output ports
@@ -154,7 +159,7 @@ function sendMidiNoteOffMessage(portIndex, note, channel) {
 }
 
 // Set up MIDI input
-// const midiInput = new midi.Input();
+const midiInput = new midi.Input();
 
 // Prompt user to select an output port
 const rl = readline.createInterface({
@@ -162,53 +167,120 @@ const rl = readline.createInterface({
     output: process.stdout,
 });
 
+function isKeyPressed(note) {
+    return !!pressedKeys[note];
+}
+
+function sustainOff() {
+    sustainPressed = false;
+    const notesToRemove = [];
+
+    // console.log('pressedKeys: ', pressedKeys);
+    // console.log('heldNotes: ', heldNotes);
+    heldNotes.forEach((note) => {
+        // console.log('isKeyPressed(note): ', isKeyPressed(note));
+        // Assume isKeyPressed checks if note is physically held
+        if (!isKeyPressed(note)) {
+            notesToRemove.push(note); // Collect non-pressed notes
+        }
+
+        notesToRemove.forEach((note) => {
+            const index = heldNotes.indexOf(note);
+            if (index !== -1) {
+                heldNotes.splice(index, 1);
+            }
+        });
+    });
+}
+
 // TODO: Handle MIDI input messages
-// midiInput.on('message', (deltaTime, message) => {
-//     if (debugInput) console.log('input msg: ', message);
-//     const [status, note, velocity] = message;
-//     const messageType = status & 0xf0;
-//     const channel = status & 0x0f;
+midiInput.on('message', (deltaTime, message) => {
+    if (debugInput) console.log('input msg: ', message);
 
-//     if (messageType === 0x90 && velocity !== 0) {
-//         // Note On
-//         noteOnTimes[note] = Date.now();
-//     } else if (
-//         messageType === 0x80 ||
-//         (messageType === 0x90 && velocity === 0)
-//     ) {
-//         // Note Off
-//         const noteOnTime = noteOnTimes[note];
-//         if (noteOnTime) {
-//             const duration = Date.now() - noteOnTime;
-//             delete noteOnTimes[note];
-//             if (duration < 1000) {
-//                 // Add note
-//                 if (!allowedPitches.includes(note)) {
-//                     allowedPitches.push(note);
+    // handle sustain pedal messages
+    if (message[0] === 176 && message[1] === 64) {
+        if (message[2] === 127) {
+            // sustain pedal pressed
+            sustainPressed = true;
+        }
+        if (message[2] === 0) {
+            // sustain pedal released
+            // TODO: fix this. Maybe race condition with note off messages
 
-//                     console.log(
-//                         `Added note ${note} to pitches (held for ${duration} ms).`
-//                     );
-//                 }
-//             } else {
-//                 // Remove note
-//                 const index = allowedPitches.indexOf(note);
-//                 if (index !== -1) {
-//                     allowedPitches.splice(index, 1);
+            sustainOff();
+            sustainOff();
+            sustainOff();
+            sustainOff();
+        }
+    }
 
-//                     console.log(
-//                         `Removed note ${note} from pitches (held for ${duration} ms).`
-//                     );
-//                 }
-//             }
-//         }
-//     }
-// });
+    const [status, note, velocity] = message;
+    const messageType = status & 0xf0;
+    const channel = status & 0x0f;
+
+    if (noteHoldMode) {
+        if (messageType === 0x90 && velocity !== 0) {
+            // Note On
+            heldNotes.push(note);
+            pressedKeys[note] = true;
+        } else if (
+            messageType === 0x80 ||
+            (messageType === 0x90 && velocity === 0)
+        ) {
+            pressedKeys[note] = false;
+            if (!sustainPressed) {
+                // Note Off
+                const index = heldNotes.indexOf(note);
+                if (index !== -1) {
+                    heldNotes.splice(index, 1);
+                }
+            }
+        }
+
+        // console.log('Held notes: ', heldNotes);
+    } else {
+        if (messageType === 0x90 && velocity !== 0) {
+            // Note On
+            noteOnTimes[note] = Date.now();
+        } else if (
+            messageType === 0x80 ||
+            (messageType === 0x90 && velocity === 0)
+        ) {
+            // Note Off
+            const noteOnTime = noteOnTimes[note];
+            if (noteOnTime) {
+                const duration = Date.now() - noteOnTime;
+                delete noteOnTimes[note];
+                if (duration < 1000) {
+                    // Add note
+                    if (!allowedPitches.includes(note)) {
+                        allowedPitches.push(note);
+
+                        console.log(
+                            `Added note ${note} to pitches (held for ${duration} ms).`
+                        );
+                    }
+                } else {
+                    // Remove note
+                    const index = allowedPitches.indexOf(note);
+                    if (index !== -1) {
+                        allowedPitches.splice(index, 1);
+
+                        console.log(
+                            `Removed note ${note} from pitches (held for ${duration} ms).`
+                        );
+                    }
+                }
+            }
+        }
+    }
+});
 
 const generateNotes = async () => {
     while (running) {
         if (playing) {
-            if (allowedPitches.length > 0) {
+            const usedPitches = noteHoldMode ? heldNotes : allowedPitches;
+            if (usedPitches.length > 0) {
                 // Decide whether to insert a silence
                 const randValue = Math.random() * 100;
                 const insertSilence = randValue < silenceProbability;
@@ -236,7 +308,7 @@ const generateNotes = async () => {
 
                             if (index > 0) {
                                 const filteredAllowedPitches =
-                                    allowedPitches.filter(
+                                    usedPitches.filter(
                                         (pitch) =>
                                             !pitchesToPlay.includes(pitch)
                                     );
@@ -245,16 +317,16 @@ const generateNotes = async () => {
                                     filteredAllowedPitches[
                                         Math.floor(
                                             Math.random() *
-                                                (allowedPitches.length -
+                                                (usedPitches.length -
                                                     pitchesToPlay.length)
                                         )
                                     ];
                             } else {
                                 pitchToAdd =
-                                    allowedPitches[
+                                    usedPitches[
                                         Math.floor(
                                             Math.random() *
-                                                (allowedPitches.length -
+                                                (usedPitches.length -
                                                     pitchesToPlay.length)
                                         )
                                     ];
@@ -268,9 +340,9 @@ const generateNotes = async () => {
 
                         for (let index = 0; index < harmonyDepth; index++) {
                             pitchesToPlay.add(
-                                allowedPitches[
+                                usedPitches[
                                     Math.floor(
-                                        Math.random() * allowedPitches.length
+                                        Math.random() * usedPitches.length
                                     )
                                 ]
                             );
@@ -327,6 +399,47 @@ const generateNotes = async () => {
     }
 };
 
+let oldPitches = [];
+
+function progressiveReplaceWithOverlap(newArray, speed) {
+    // set oldPitches to a value equal to allowedPitches, without referencing it
+    oldPitches = allowedPitches.slice();
+
+    // every 50ms, add an item form newArray to allowedPitches until all newArray items are added
+    const interval = setInterval(() => {
+        if (newArray.length > 0) {
+            const randomIndex = Math.floor(Math.random() * newArray.length);
+            const randomPitch = newArray[randomIndex];
+            if (!allowedPitches.includes(randomPitch)) {
+                allowedPitches.push(randomPitch);
+                newArray.splice(randomIndex, 1);
+            }
+
+            // if first item form allowedPitches is in oldPitches, remove it
+            if (oldPitches.includes(allowedPitches[0])) {
+                // const index = allowedPitches.indexOf(allowedPitches[0]);
+                // oldPitches.splice(index, 1);
+                allowedPitches.splice(0, 1);
+                oldPitches.splice(0, 1);
+            }
+            console.log('allowedPitches: ', allowedPitches);
+        } else if (newArray.length === 0 && oldPitches.length > 0) {
+            // remove from allowed pitches the first item that is in oldPitches
+            if (allowedPitches.includes(oldPitches[0])) {
+                const index = allowedPitches.indexOf(oldPitches[0]);
+                allowedPitches.splice(index, 1);
+                oldPitches.splice(0, 1);
+            }
+            console.log('oldPitches: ', oldPitches);
+            console.log('allowedPitches: ', allowedPitches);
+        } else {
+            oldPitches = [];
+            clearInterval(interval);
+        }
+    }, speed);
+}
+
+// TODO: refactor this to be cleaner (switch statement?)
 const handleCommandWithArgs = (input) => {
     const cmd = input.slice(0, 2);
     const arg = input.slice(2);
@@ -396,6 +509,12 @@ const handleCommandWithArgs = (input) => {
             console.log('Invalid value for silence probability.');
         }
     } else if (cmd === 'cp') {
+        if (arg === '') {
+            console.log('Cleared allowed pitches array.');
+            allowedPitches = [];
+            return;
+        }
+
         allowedPitches = parseMidiNotes(arg);
 
         console.log('Set pitches to:');
@@ -433,6 +552,18 @@ const handleCommandWithArgs = (input) => {
             }
         } else {
             console.log('Invalid value for silence duration bound.');
+        }
+    } else if (cmd === 'pr') {
+        const [interval, notes] = arg.split('-');
+        const parsedNotes = parseMidiNotes(notes);
+        const parsedInterval = parseInt(interval, 10);
+
+        if (
+            parsedNotes.length > 0 &&
+            !isNaN(parsedInterval) &&
+            parsedInterval > 0
+        ) {
+            progressiveReplaceWithOverlap(parsedNotes, parsedInterval);
         }
     } else if (cmd === 'vl' || cmd === 'vu') {
         const value = parseInt(arg.trim(), 10);
@@ -510,11 +641,11 @@ process.on('exit', () => {
 
 // Start the main program
 (async () => {
-    // inputDesired = await waitForInputDesired(rl);
-    // if (inputDesired) {
-    //     gatherAndPrintInputs(midiInput);
-    //     await waitForInputSelection(rl, midiInput);
-    // }
+    inputDesired = await waitForInputDesired(rl);
+    if (inputDesired) {
+        gatherAndPrintInputs(midiInput);
+        await waitForInputSelection(rl, midiInput);
+    }
     allowedPitches = await waitForStartingPitches(rl, defaultPitches);
     printInstructions();
 
@@ -548,7 +679,7 @@ process.on('exit', () => {
                         sendMidiNoteOffMessage(i, index);
                     }
                 }
-                // midiInput.closePort();
+                midiInput.closePort();
                 outputs.forEach((output) => output.closePort());
                 process.exit(0);
 
@@ -567,6 +698,11 @@ process.on('exit', () => {
             case 'di':
                 debugInput = !debugInput;
                 console.log(`setting debugInput to ${debugInput}`);
+                break;
+
+            case 'nh':
+                noteHoldMode = !noteHoldMode;
+                console.log(`setting noteHoldMode to ${noteHoldMode}`);
                 break;
 
             case 'dp':

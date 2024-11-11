@@ -1,6 +1,6 @@
 export const waitForInputDesired = (rl) => {
     return new Promise((resolve) => {
-        rl.question('Should we manage MIDI input also ?, y/n: ', (data) => {
+        rl.question('Should we manage MIDI input ?, y/n: ', (data) => {
             resolve(data == 'y');
         });
     });
@@ -116,7 +116,7 @@ export const printInstructions = () => {
     console.log(
         "To change upper velocity bound: type 'vu' followed by the value, e.g., 'vu120'."
     );
-    console.log("To print active ports and channels, type 'pc'");
+    console.log("To print active ports and channels, type 'pa'");
     console.log("To print available ports, type 'pp'");
     console.log("To toggle harmonyMustBeFull, type 'hf'");
     console.log("To print instruction like this here, type 'h'");
